@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <style>
+            table, td, th {
+                border: 1px solid black;
+            }
+            td, th {
+                padding: 5px;
+            }
+        </style>
+    </head>
+    <body>
+        <table id="results">
+
+        </table>
+
+        <script>
+            let testParams = {
+                codec: [
+                    "avc1.42002a",  // avc baseline profile
+                    "avc1.4d002a",  // avc main profile
+                    "avc1.64002a",  // avc high profile
+                ],
+                optimizeForLatency: true,
+                hardwareAcceleration: ["prefer-hardware", "prefer-software"]
+            };
+
+            async function benchCodec(params) {
+                const codecFolder = {
+                    "avc1.42002a": "/avc1_42002a/",
+                    "avc1.4d002a": "/avc1_4d002a/",
+                    "avc1.64002a": "/avc1_64002a/",
+                }[params.codec];
+
+                const latencies = [];
+
+                const decoder = new VideoDecoder({
+                    output(frame) {
+                        latencies.push(performance.now() - decoder.submitTimes[decoder.frame++]);
+                        frame.close();
+                    },
+                    error(err) {
+                        throw err
+                    }
+                });
+                decoder.frame = 0;
+                decoder.submitTimes = [];
+                decoder.decodeTimes = [];
+
+                decoder.configure(params);
+
+                const rootURL = document.URL.substring(0, document.URL.lastIndexOf("/"));
+
+                for (let i = 0; i < 450; i++) {
+                    const encodedVideoChunk = new EncodedVideoChunk({
+                        type: "key",
+                        timestamp: i * (1e6 / 90) | 0,
+                        duration: 10 * 1e6,
+                        data: await (await fetch(codecFolder + (i + 1 + "").padStart(5, '0') + ".h264")).arrayBuffer()
+                    });
+                    decoder.submitTimes[i] = performance.now();
+                    decoder.decode(encodedVideoChunk);
+                    while (decoder.decodeQueueSize) await new Promise((res, rej) => {setTimeout(res, 1)});
+                }
+
+                decoder.close();
+
+                const totalTime = latencies.reduce((a, b) => (a + b));
+
+                const pixPerSec = 1920 * 1067 * 450 * 1e3 / totalTime;
+
+                const avgLatency = totalTime / latencies.length;
+                const stdDevLatency = Math.sqrt(latencies.map((v) => Math.pow(v - avgLatency, 2)).reduce((a, b) => (a + b)) / (latencies.length - 1));
+
+                return [avgLatency, stdDevLatency, pixPerSec];
+            }
+
+            const resultsTable = document.getElementById("results");
+
+            const headerRow = resultsTable.insertRow(0);
+            const testKeys = [...Object.keys(testParams), "isSupported", "latencyMean", "latencyStdDev", "mPixPerSec"];
+
+            for (const key of testKeys) {
+                const header = document.createElement("th");
+                header.innerText = key;
+                headerRow.appendChild(header);
+            }
+
+            function* permutate(obj) {
+                let wasPermFound = false;
+                for (const key in obj) {
+                    const perms = obj[key];
+                    if (wasPermFound |= Array.isArray(perms)) {
+                        for (const perm of perms) {
+                            const newObj = {};
+                            Object.assign(newObj, obj);
+                            newObj[key] = perm;
+                            yield* permutate(newObj);
+                        }
+                        break;
+                    }
+                }
+                if (!wasPermFound) yield obj;
+            }
+
+            const cfgPerms = permutate(testParams);
+            let retPerm;
+            const tests = [];
+            const configPromises = [];
+            while (!(retPerm = cfgPerms.next()).done) {
+                const perm = retPerm.value;
+                configPromises.push(VideoDecoder.isConfigSupported(perm).then(res => {
+                    const {config, supported} = res;
+
+                    const codecResults = {
+                        ...config,
+                        isSupported: supported,
+                        latencyMean: supported && "waiting...",
+                        latencyStdDev: supported && "waiting...",
+                        mPixPerSec: supported && "waiting..."
+                    };
+
+                    const row = resultsTable.insertRow(-1);
+
+                    const asyncCells = { mean: null, stdDev: null, mPixPerSec: null }
+
+                    for (const key of testKeys) {
+                        const cell = row.insertCell(-1);
+                        cell.innerText = codecResults[key];
+                        switch (key) {
+                            case "isSupported": {
+                                cell.style.fontWeight = "bold"
+                                cell.style.color = codecResults[key] ? "green" : "red";
+                                break;
+                            }
+                            case "latencyMean": { asyncCells.mean = cell; break; }
+                            case "latencyStdDev": { asyncCells.stdDev = cell; break; }
+                            case "mPixPerSec": { asyncCells.mPixPerSec = cell; break; }
+                        }
+                    }
+
+                    if (supported) {
+                        tests.push({
+                            cfg: config,
+                            cells: asyncCells
+                        }); 
+                    }
+                }));
+            }
+
+            (async () => {
+                await Promise.all(configPromises);
+                for (const test of tests) {
+                    console.log("testing", test);
+                    const {
+                        cfg: config, 
+                        cells: {
+                            mean: meanCell, 
+                            stdDev: stdDevCell, 
+                            mPixPerSec: mPixPerSecCell
+                        }
+                    } = test;
+
+                    meanCell.innerText = stdDevCell.innerText = mPixPerSecCell.innerText = "running...";
+                    const [mean, stdDev, pixPerSec] = await benchCodec(config);
+                    [meanCell.innerText, stdDevCell.innerText] = [mean, stdDev].map(a => a.toFixed(2));
+                    mPixPerSecCell.innerText = pixPerSec * 1e-6 | 0;
+
+                }
+            })();
+        </script>
+    </body>
+</html>
