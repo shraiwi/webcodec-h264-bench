@@ -41,7 +41,7 @@
                         frame.close();
                     },
                     error(err) {
-                        throw err
+                        console.error(err);
                     }
                 });
                 decoder.frame = 0;
@@ -163,10 +163,15 @@
                     } = test;
 
                     meanCell.innerText = stdDevCell.innerText = mPixPerSecCell.innerText = "running...";
-                    const [mean, stdDev, pixPerSec] = await benchCodec(config);
-                    [meanCell.innerText, stdDevCell.innerText] = [mean, stdDev].map(a => a.toFixed(2));
-                    mPixPerSecCell.innerText = pixPerSec * 1e-6 | 0;
-
+                    try {
+                        const [mean, stdDev, pixPerSec] = await benchCodec(config);
+                        [meanCell.innerText, stdDevCell.innerText] = [mean, stdDev].map(a => a.toFixed(2));
+                        mPixPerSecCell.innerText = pixPerSec * 1e-6 | 0;
+                    } catch (e) {
+                        meanCell.innerText = stdDevCell.innerText = mPixPerSecCell.innerText = e;
+                        meanCell.style.color = stdDevCell.style.color = mPixPerSecCell.style.color = "red";
+                        meanCell.style.fontWeight = stdDevCell.style.fontWeight = mPixPerSecCell.style.fontWeight = "bold";
+                    }
                 }
             })();
         </script>
