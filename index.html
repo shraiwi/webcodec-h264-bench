@@ -26,7 +26,7 @@
                 hardwareAcceleration: ["prefer-hardware", "prefer-software"]
             };
 
-            async function benchCodec(params) {
+            async function benchCodec(params, progressCb = (p) => {}) {
                 const codecFolder = {
                     "avc1.42002a": "/webcodec-h264-bench/avc1_42002a/",
                     "avc1.4d002a": "/webcodec-h264-bench/avc1_4d002a/",
@@ -61,6 +61,7 @@
                     });
                     decoder.submitTimes[i] = performance.now();
                     decoder.decode(encodedVideoChunk);
+                    progressCb(i / 450);
                     while (decoder.decodeQueueSize) await new Promise((res, rej) => {setTimeout(res, 1)});
                 }
 
@@ -162,9 +163,11 @@
                         }
                     } = test;
 
-                    meanCell.innerText = stdDevCell.innerText = mPixPerSecCell.innerText = "running...";
+                    meanCell.innerText = stdDevCell.innerText = mPixPerSecCell.innerText = "starting...";
                     try {
-                        const [mean, stdDev, pixPerSec] = await benchCodec(config);
+                        const [mean, stdDev, pixPerSec] = await benchCodec(config, (p) => {
+                            meanCell.innerText = stdDevCell.innerText = mPixPerSecCell.innerText = `running... ${(p * 100).toFixed(2)}%`;
+                        });
                         [meanCell.innerText, stdDevCell.innerText] = [mean, stdDev].map(a => a.toFixed(2));
                         mPixPerSecCell.innerText = pixPerSec * 1e-6 | 0;
                     } catch (e) {
