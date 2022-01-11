@@ -56,10 +56,11 @@
                     avc1: "h264",
                     hev1: "h265",
                     hvc1: "h265",
+                    vp09: "vp9",
                 }[codec.replace(/\..*/, '')];
 
                 for (let i = 0; i < numFrames; i++) {
-                    const url = `${codec.replace('.', '_')}/${(i + 1).toString().padStart(3, '0')}.${ext}`;
+                    const url = `${codec.replaceAll('.', '_')}/${(i + 1).toString().padStart(3, '0')}.${ext}`;
                     //console.log(url);
                     reses[i] = fetch(url).then(async (f) => {
                         const buf = await f.arrayBuffer();
@@ -179,10 +180,6 @@
                             if (supported) {
                                 if (!(config.codec in testVids)) {
                                     testVids[config.codec] = [];
-                                    
-                                    testVids[config.codec] = await loadVideo(config.codec, (p) => {
-                                        progressCb(config.codec, p);
-                                    });
                                 }
                                 supportedConfigs.push(config); 
                             }
@@ -192,6 +189,12 @@
 
                 await Promise.all(prepPromises);
 
+                for (const codec in testVids) {
+                    testVids[codec] = await loadVideo(codec, (p) => {
+                        progressCb(codec, p);
+                    });
+                }
+
                 return [supportedConfigs, testVids];
             }
 
@@ -199,9 +202,13 @@
 
                 const testParams = {
                     codec: [
-                        "avc1.42002a",  // avc baseline profile
-                        "avc1.4d002a",  // avc main profile
-                        "avc1.64002a",  // avc high profile
+                        "avc1.42002a",      // avc baseline profile
+                        "avc1.4d002a",      // avc main profile
+                        "avc1.64002a",      // avc high profile
+                        "vp09.00.40.08.00.01.01.01.00", // vp9 level 4.1
+                        /*"hev1.1.2.L123",    // hevc main L4.1
+                        "hev1.1.2.L153",    // hevc main L5.1
+                        "hev1.1.2.L183",    // hevc main L6.1*/
                     ],
                     codedWidth: 1088,
                     codedHeight: 1088,
