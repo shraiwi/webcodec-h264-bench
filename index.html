@@ -266,18 +266,28 @@
 
                     const codecBar = addProgressBar(`running ${config.codec}/${config.hardwareAcceleration}`);
 
-                    const testResult = await benchDecoder(config, testVids[config.codec], (p) => {
-                        codecBar.value = p;
-                        progressBarHolder.scrollTop = progressBarHolder.scrollHeight;
-                    });
                     const row = resultsTable.insertRow(-1);
 
-                    for (const key of tableHeaders) {
-                        const v = testResult[key];
-                        row.insertCell().innerText = typeof(v) === "number" ? v.toPrecision(4) : v;
-                    }
+                    try {
+                        const testResult = await benchDecoder(config, testVids[config.codec], (p) => {
+                            codecBar.value = p;
+                            progressBarHolder.scrollTop = progressBarHolder.scrollHeight;
+                        });
+                        
+                        for (const key of tableHeaders) {
+                            const v = testResult[key];
+                            row.insertCell().innerText = typeof(v) === "number" ? v.toPrecision(4) : v;
+                        }
 
-                    testResults.push(testResult);
+                        testResults.push(testResult);
+                    } catch (e) {
+                        const errCell = row.insertCell();
+                        errCell.style.fontWeight = "bold";
+                        errCell.style.color = "red";
+                        errCell.style.textAlign = "center";
+                        errCell.colSpan = tableHeaders.length;
+                        errCell.innerText = e;
+                    }
                 }
 
                 console.table(testResults);
