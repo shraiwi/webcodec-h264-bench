@@ -23,6 +23,8 @@
         </style>
     </head>
     <body>
+        <button onclick="runBench()">run benchmark</button>
+        
 
         <h1>results</h1>
         <table id="results"></table>
@@ -198,7 +200,7 @@
                 return [supportedConfigs, testVids];
             }
 
-            (async () => {
+            async function runBench() {
 
                 const testParams = {
                     codec: [
@@ -291,7 +293,16 @@
                 }
 
                 console.table(testResults);
-            })();
+
+                const resultsBlob = new Blob([JSON.stringify(testResults)], { type: "octet/stream" });
+                resultsBlob.url = window.URL.createObjectURL(resultsBlob);
+
+                const dlLink = document.createElement("a");
+                dlLink.href = resultsBlob.url;
+                dlLink.download = dlLink.innerText = "results.json";
+
+                document.body.appendChild(dlLink);
+            };
         </script>
     </body>
 </html>
