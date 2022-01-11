@@ -2,92 +2,35 @@
 <html>
     <head>
         <style>
-            table, td, th {
-                border: 1px solid black;
+            * { font-family: sans-serif; }
+            progress { 
+                margin-left: 5px;
+                float: right;
             }
-            td, th {
-                padding: 5px;
+
+            th { font-weight: bold; }
+            td { padding: 5px; }
+            table td + td { border-left: 1px solid black; }
+            tr:nth-child(even) { background-color: #f2f2f2; }
+
+            /*table { margin: 5px; }*/
+
+            #progress-bar-holder {
+                width: fit-content;
+                height: 100px;
+                overflow-y: scroll;
             }
         </style>
     </head>
     <body>
-        <table id="results">
 
-        </table>
+        <h1>results</h1>
+        <table id="results"></table>
+
+        <h1>tasks</h1>
+        <div id="progress-bar-holder"></div>
 
         <script>
-            let testParams = {
-                codec: [
-                    "avc1.42002a",  // avc baseline profile
-                    "avc1.4d002a",  // avc main profile
-                    "avc1.64002a",  // avc high profile
-                ],
-                optimizeForLatency: true,
-                hardwareAcceleration: ["prefer-hardware", "prefer-software"]
-            };
-
-            async function benchCodec(params, progressCb = (p) => {}) {
-                const codecFolder = {
-                    "avc1.42002a": "/webcodec-h264-bench/avc1_42002a/",
-                    "avc1.4d002a": "/webcodec-h264-bench/avc1_4d002a/",
-                    "avc1.64002a": "/webcodec-h264-bench/avc1_64002a/",
-                }[params.codec];
-
-                const latencies = [];
-
-                const decoder = new VideoDecoder({
-                    output(frame) {
-                        latencies.push(performance.now() - decoder.submitTimes[decoder.frame++]);
-                        frame.close();
-                    },
-                    error(err) {
-                        console.error(err);
-                    }
-                });
-                decoder.frame = 0;
-                decoder.submitTimes = [];
-                decoder.decodeTimes = [];
-
-                decoder.configure(params);
-
-                const rootURL = document.URL.substring(0, document.URL.lastIndexOf("/"));
-
-                for (let i = 0; i < 450; i++) {
-                    const encodedVideoChunk = new EncodedVideoChunk({
-                        type: "key",
-                        timestamp: i * (1e6 / 90) | 0,
-                        duration: 10 * 1e6,
-                        data: await (await fetch(codecFolder + (i + 1 + "").padStart(5, '0') + ".h264")).arrayBuffer()
-                    });
-                    decoder.submitTimes[i] = performance.now();
-                    decoder.decode(encodedVideoChunk);
-                    progressCb(i / 450);
-                    while (decoder.decodeQueueSize) await new Promise((res, rej) => {setTimeout(res, 1)});
-                }
-
-                decoder.close();
-
-                const totalTime = latencies.reduce((a, b) => (a + b));
-
-                const pixPerSec = 1920 * 1067 * 450 * 1e3 / totalTime;
-
-                const avgLatency = totalTime / latencies.length;
-                const stdDevLatency = Math.sqrt(latencies.map((v) => Math.pow(v - avgLatency, 2)).reduce((a, b) => (a + b)) / (latencies.length - 1));
-
-                return [avgLatency, stdDevLatency, pixPerSec];
-            }
-
-            const resultsTable = document.getElementById("results");
-
-            const headerRow = resultsTable.insertRow(0);
-            const testKeys = [...Object.keys(testParams), "isSupported", "latencyMean", "latencyStdDev", "mPixPerSec"];
-
-            for (const key of testKeys) {
-                const header = document.createElement("th");
-                header.innerText = key;
-                headerRow.appendChild(header);
-            }
-
             function* permutate(obj) {
                 let wasPermFound = false;
                 for (const key in obj) {
@@ -105,77 +48,232 @@
                 if (!wasPermFound) yield obj;
             }
 
-            const cfgPerms = permutate(testParams);
-            let retPerm;
-            const tests = [];
-            const configPromises = [];
-            while (!(retPerm = cfgPerms.next()).done) {
-                const perm = retPerm.value;
-                configPromises.push(VideoDecoder.isConfigSupported(perm).then(res => {
-                    const {config, supported} = res;
+            async function loadVideo(codec, progressCb = (p) => {}, numFrames = 450) {
+                const reses = [];
+                let downloaded = 0;
 
-                    const codecResults = {
-                        ...config,
-                        isSupported: supported,
-                        latencyMean: supported && "waiting...",
-                        latencyStdDev: supported && "waiting...",
-                        mPixPerSec: supported && "waiting..."
-                    };
+                const ext = {
+                    avc1: "h264",
+                    hev1: "h265",
+                    hvc1: "h265",
+                }[codec.replace(/\..*/, '')];
 
-                    const row = resultsTable.insertRow(-1);
+                for (let i = 0; i < numFrames; i++) {
+                    const url = `${codec.replace('.', '_')}/${(i + 1).toString().padStart(3, '0')}.${ext}`;
+                    //console.log(url);
+                    reses[i] = fetch(url).then(async (f) => {
+                        const buf = await f.arrayBuffer();
+                        progressCb((++downloaded) / numFrames);
+                        return new EncodedVideoChunk({
+                            type: "key",
+                            timestamp: i,
+                            duration: 1,
+                            data: buf
+                        });
+                    });
+                }
+                return await Promise.all(reses);
+            }
 
-                    const asyncCells = { mean: null, stdDev: null, mPixPerSec: null }
+            class AsyncVideoDecoder extends VideoDecoder {
+                constructor() {
+                    super({ output: (f) => this.onOutput(f), error: (e) => this.onError(e) });
+                    this.latencies = [];
+                    this.submitTimes = [];
+                }
 
-                    for (const key of testKeys) {
-                        const cell = row.insertCell(-1);
-                        cell.innerText = codecResults[key];
-                        switch (key) {
-                            case "isSupported": {
-                                cell.style.fontWeight = "bold"
-                                cell.style.color = codecResults[key] ? "green" : "red";
-                                break;
+                reset() {
+                    this.latencies = [];
+                    this.submitTimes = [];
+                    return super.reset();
+                }
+
+                onOutput(frame) {
+                    this.latencies[frame.timestamp] = performance.now() - this.submitTimes[frame.timestamp];
+                    frame.close();
+                }
+
+                onError(e) {
+                    throw e;
+                }
+
+                async decode(chunk) {
+                    this.submitTimes[chunk.timestamp] = performance.now();
+                    super.decode(chunk);
+
+                    while (super.decodeQueueSize) {
+                        await new Promise((res, rej) => setTimeout(res, 1));
+                    }
+                }
+            }
+
+            async function benchDecoder(config, encodedChunks, progressCb = (p) => {}) {
+
+                const logP = (p) => console.info(`${(p * 1e2).toFixed(2)}%`);
+                const dec = new AsyncVideoDecoder();
+                const testResults = {
+                    codec: config.codec,
+                    hwAccel: config.hardwareAcceleration,
+
+                    vidWidth: config.codedWidth,
+                    vidHeight: config.codedHeight,
+
+                    latencyRaw: [],
+                    latencyAvg: NaN,
+                    latencyStdDev: NaN,
+
+                    throughputData: NaN,
+                    throughputMPixPerSec: NaN,
+                };
+
+                // latency test
+                dec.configure(config);
+                
+                for (const i in encodedChunks) {
+                    await dec.decode(encodedChunks[i]);
+                    progressCb(i * 0.5 / encodedChunks.length);
+                }
+                await dec.flush();
+                
+                testResults.latencyRaw = dec.latencies;
+                const latencySum = dec.latencies.reduce((a, b) => a + b);
+                testResults.latencyAvg = latencySum / dec.latencies.length;
+                testResults.latencyStdDev = Math.sqrt(
+                    dec.latencies.map((a) => Math.pow(a - testResults.latencyAvg, 2)).reduce((a, b) => a + b) / dec.latencies.length
+                );
+
+                dec.reset();
+
+                // throughput test
+                dec.configure(config);
+
+                const startTime = performance.now();
+                for (const i in encodedChunks) dec.decode(encodedChunks[i]);
+                const progressCbHandle = setInterval(() => {
+                    progressCb((encodedChunks.length - dec.decodeQueueSize) * 0.5 / encodedChunks.length + 0.5);
+                });
+                await dec.flush();
+                clearInterval(progressCbHandle);
+
+                testResults.throughputData = performance.now() - startTime;
+                testResults.throughputMPixPerSec = testResults.vidWidth * testResults.vidHeight * encodedChunks.length / (testResults.throughputData * 1e3);
+
+                dec.close();
+
+                return testResults;
+            }
+
+            async function fetchTestVids(testConfigs, progressCb = (codec, p) => {}) {
+                const configPermutations = permutate(testConfigs),
+                    testVids = {},
+                    supportedConfigs = [],
+                    prepPromises = [];
+                let nextConfigPermutation;
+
+                while (!(nextConfigPermutation = configPermutations.next()).done) {
+                    const testConfig = nextConfigPermutation.value;
+                    prepPromises.push(
+                        VideoDecoder.isConfigSupported(testConfig).then(async (res) => {
+                            const {config, supported} = res;
+
+                            if (supported) {
+                                if (!(config.codec in testVids)) {
+                                    testVids[config.codec] = [];
+                                    
+                                    testVids[config.codec] = await loadVideo(config.codec, (p) => {
+                                        progressCb(config.codec, p);
+                                    });
+                                }
+                                supportedConfigs.push(config); 
                             }
-                            case "latencyMean": { asyncCells.mean = cell; break; }
-                            case "latencyStdDev": { asyncCells.stdDev = cell; break; }
-                            case "mPixPerSec": { asyncCells.mPixPerSec = cell; break; }
-                        }
-                    }
+                        })
+                    );
+                }
 
-                    if (supported) {
-                        tests.push({
-                            cfg: config,
-                            cells: asyncCells
-                        }); 
-                    }
-                }));
+                await Promise.all(prepPromises);
+
+                return [supportedConfigs, testVids];
             }
 
             (async () => {
-                await Promise.all(configPromises);
-                for (const test of tests) {
-                    console.log("testing", test);
-                    const {
-                        cfg: config, 
-                        cells: {
-                            mean: meanCell, 
-                            stdDev: stdDevCell, 
-                            mPixPerSec: mPixPerSecCell
-                        }
-                    } = test;
 
-                    meanCell.innerText = stdDevCell.innerText = mPixPerSecCell.innerText = "starting...";
-                    try {
-                        const [mean, stdDev, pixPerSec] = await benchCodec(config, (p) => {
-                            meanCell.innerText = stdDevCell.innerText = mPixPerSecCell.innerText = `running... ${(p * 100).toFixed(2)}%`;
-                        });
-                        [meanCell.innerText, stdDevCell.innerText] = [mean, stdDev].map(a => a.toFixed(2));
-                        mPixPerSecCell.innerText = pixPerSec * 1e-6 | 0;
-                    } catch (e) {
-                        meanCell.innerText = stdDevCell.innerText = mPixPerSecCell.innerText = e;
-                        meanCell.style.color = stdDevCell.style.color = mPixPerSecCell.style.color = "red";
-                        meanCell.style.fontWeight = stdDevCell.style.fontWeight = mPixPerSecCell.style.fontWeight = "bold";
-                    }
+                const testParams = {
+                    codec: [
+                        "avc1.42002a",  // avc baseline profile
+                        "avc1.4d002a",  // avc main profile
+                        "avc1.64002a",  // avc high profile
+                    ],
+                    codedWidth: 1088,
+                    codedHeight: 1088,
+                    optimizeForLatency: true,
+                    hardwareAcceleration: ["prefer-hardware", "prefer-software"]
+                };
+                const progressBarHolder = document.getElementById("progress-bar-holder");
+                const resultsTable = document.getElementById("results");
+                const progressBars = {};
+
+                const addProgressBar = (name) => {
+                    const progressBar = document.createElement("progress");
+                    const progressBarLabel = document.createElement("label");
+                    progressBar.max = 1.0;
+                    progressBar.value = 0.0;
+                    progressBarLabel.innerText = name;
+
+                    progressBarHolder.append(progressBarLabel, progressBar, document.createElement("br"));
+
+                    return progressBar;
                 }
+
+                console.log("downloading test videos...");
+
+                const [supportedConfigs, testVids] = await fetchTestVids(testParams, (codec, p) => {
+                    if (codec in progressBars) {
+                        progressBars[codec].value = p;
+                        progressBarHolder.scrollTop = progressBarHolder.scrollHeight;
+                    } else {
+                        progressBars[codec] = addProgressBar(`download ${codec}`);
+                    }
+                });
+
+                const testResults = [];
+                const tableHeaders = [
+                    "codec", 
+                    "hwAccel",
+                    "latencyAvg",
+                    "latencyStdDev",
+                    "throughputMPixPerSec"
+                ];
+
+                const headerRow = resultsTable.insertRow();
+
+                for (const tableHeader of tableHeaders) {
+                    const headerCell = headerRow.insertCell();
+                    headerCell.innerText = tableHeader;
+                    headerCell.style.fontWeight = "bold";
+                }
+
+                console.log("done!", testVids);
+
+                for (const config of supportedConfigs) {
+                    console.log("testing", config);
+
+                    const codecBar = addProgressBar(`running ${config.codec}/${config.hardwareAcceleration}`);
+
+                    const testResult = await benchDecoder(config, testVids[config.codec], (p) => {
+                        codecBar.value = p;
+                        progressBarHolder.scrollTop = progressBarHolder.scrollHeight;
+                    });
+                    const row = resultsTable.insertRow(-1);
+
+                    for (const key of tableHeaders) {
+                        const v = testResult[key];
+                        row.insertCell().innerText = typeof(v) === "number" ? v.toPrecision(4) : v;
+                    }
+
+                    testResults.push(testResult);
+                }
+
+                console.table(testResults);
             })();
         </script>
     </body>
